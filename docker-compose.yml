@@ -1,0 +1,158 @@
+version: "3.9"
+
+services:
+  # Infrastructure Services
+  mssql:
+    container_name: repairshop-mssql
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    ports:
+      - "1433:1433"
+      - "1434:1434/udp"
+    environment:
+      SA_PASSWORD: "${SQL_SA_PASSWORD:-!MyStrongPassword}"
+      ACCEPT_EULA: "Y"
+    volumes:
+      - mssql-data:/var/opt/mssql
+    networks:
+      - repairshop-network
+    healthcheck:
+      test: /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${SQL_SA_PASSWORD:-!MyStrongPassword}" -Q "SELECT 1" || exit 1
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  rabbitmq:
+    container_name: repairshop-rabbitmq
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: "${RABBITMQ_USER:-guest}"
+      RABBITMQ_DEFAULT_PASS: "${RABBITMQ_PASSWORD:-guest}"
+      RABBITMQ_DEFAULT_VHOST: "${RABBITMQ_VHOST:-repairshop}"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - repairshop-network
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 30s
+      retries: 3
+
+  # Application Services
+  webapi:
+    container_name: repairshop-webapi
+    build:
+      context: .
+      dockerfile: src/Web/WebAPI/Dockerfile
+    ports:
+      - "5000:80"
+      - "5001:443"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:80
+      - MessageBusOptions__Host=rabbitmq
+      - MessageBusOptions__Username=${RABBITMQ_USER:-guest}
+      - MessageBusOptions__Password=${RABBITMQ_PASSWORD:-guest}
+      - MessageBusOptions__VirtualHost=${RABBITMQ_VHOST:-repairshop}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - repairshop-network
+    restart: unless-stopped
+
+  repairorder-worker:
+    container_name: repairshop-repairorder-worker
+    build:
+      context: .
+      dockerfile: src/Services/RepairOrder/WorkerService/Dockerfile
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__EventStoreConnection=Server=mssql;Database=RepairOrderEventStore;User Id=sa;Password=${SQL_SA_PASSWORD:-!MyStrongPassword};TrustServerCertificate=True;
+      - MessageBusOptions__Host=rabbitmq
+      - MessageBusOptions__Username=${RABBITMQ_USER:-guest}
+      - MessageBusOptions__Password=${RABBITMQ_PASSWORD:-guest}
+      - MessageBusOptions__VirtualHost=${RABBITMQ_VHOST:-repairshop}
+    depends_on:
+      mssql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - repairshop-network
+    restart: unless-stopped
+
+  scheduling-worker:
+    container_name: repairshop-scheduling-worker
+    build:
+      context: .
+      dockerfile: src/Services/Scheduling/WorkerService/Dockerfile
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__EventStoreConnection=Server=mssql;Database=SchedulingEventStore;User Id=sa;Password=${SQL_SA_PASSWORD:-!MyStrongPassword};TrustServerCertificate=True;
+      - MessageBusOptions__Host=rabbitmq
+      - MessageBusOptions__Username=${RABBITMQ_USER:-guest}
+      - MessageBusOptions__Password=${RABBITMQ_PASSWORD:-guest}
+      - MessageBusOptions__VirtualHost=${RABBITMQ_VHOST:-repairshop}
+    depends_on:
+      mssql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - repairshop-network
+    restart: unless-stopped
+
+  warehouse-worker:
+    container_name: repairshop-warehouse-worker
+    build:
+      context: .
+      dockerfile: src/Services/Warehouse/WorkerService/Dockerfile
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__EventStoreConnection=Server=mssql;Database=WarehouseEventStore;User Id=sa;Password=${SQL_SA_PASSWORD:-!MyStrongPassword};TrustServerCertificate=True;
+      - MessageBusOptions__Host=rabbitmq
+      - MessageBusOptions__Username=${RABBITMQ_USER:-guest}
+      - MessageBusOptions__Password=${RABBITMQ_PASSWORD:-guest}
+      - MessageBusOptions__VirtualHost=${RABBITMQ_VHOST:-repairshop}
+    depends_on:
+      mssql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - repairshop-network
+    restart: unless-stopped
+
+  customer-worker:
+    container_name: repairshop-customer-worker
+    build:
+      context: .
+      dockerfile: src/Services/Customer/WorkerService/Dockerfile
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__EventStoreConnection=Server=mssql;Database=CustomerEventStore;User Id=sa;Password=${SQL_SA_PASSWORD:-!MyStrongPassword};TrustServerCertificate=True;
+      - MessageBusOptions__Host=rabbitmq
+      - MessageBusOptions__Username=${RABBITMQ_USER:-guest}
+      - MessageBusOptions__Password=${RABBITMQ_PASSWORD:-guest}
+      - MessageBusOptions__VirtualHost=${RABBITMQ_VHOST:-repairshop}
+    depends_on:
+      mssql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - repairshop-network
+    restart: unless-stopped
+
+networks:
+  repairshop-network:
+    driver: bridge
+
+volumes:
+  mssql-data:
+  rabbitmq-data:
